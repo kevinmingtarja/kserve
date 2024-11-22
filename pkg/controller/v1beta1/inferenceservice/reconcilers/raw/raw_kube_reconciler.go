@@ -64,7 +64,6 @@ func NewRawKubeReconciler(client client.Client,
 	if err != nil {
 		return nil, err
 	}
-
 	var multiNodeEnabled bool
 	if workerPodSpec != nil {
 		multiNodeEnabled = true

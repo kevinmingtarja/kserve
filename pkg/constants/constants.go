@@ -478,6 +478,25 @@ const (
 const (
 	IstioVirtualServiceKind = "VirtualService"
 	KnativeServiceKind      = "Service"
+	ClusterLocalModelKind   = "ClusterLocalModel"
+)
+
+// Model Parallel Options
+const (
+	TensorParallelSizeEnvName   = "TENSOR_PARALLEL_SIZE"
+	PipelineParallelSizeEnvName = "PIPELINE_PARALLEL_SIZE"
+)
+
+// Model Parallel Options Default value
+const (
+	DefaultTensorParallelSize   = "1"
+	DefaultPipelineParallelSize = "2"
+)
+
+// Multi Node Labels
+var (
+	MultiNodeRoleLabelKey = "multinode/role"
+	MultiNodeHead         = "head"
 )
 
 // Model Parallel Options

@@ -482,3 +482,85 @@ func multiNodeProcess(sRuntime v1alpha1.ServingRuntimeSpec, isvc *v1beta1.Infere
 	}
 	return mergedWorkerPodSpec, nil
 }
+
+func multiNodeProcess(sRuntime v1alpha1.ServingRuntimeSpec, isvc *v1beta1.InferenceService, podSpec *v1.PodSpec, annotations map[string]string, isvcGeneration string) (*v1.PodSpec, error) {
+	if sRuntime.WorkerSpec == nil {
+		errMsg := "you cannot set WorkerSpec in the InferenceService if the ServingRuntime does not have a WorkerSpec"
+		isvc.Status.PropagateRawStatusWithMessages(v1beta1.PredictorComponent, v1beta1.InvalidWorkerSpecNotSet, errMsg, v1.ConditionFalse)
+		return nil, errors.New(errMsg)
+	}
+	// Check if workerSpec in ServingRuntime does not have worker containers information, it should return errors
+	if len(sRuntime.WorkerSpec.Containers) == 0 {
+		errMsg := "No workerSpec container configuration found in selected serving runtime"
+		isvc.Status.UpdateModelTransitionStatus(v1beta1.InvalidSpec, &v1beta1.FailureInfo{
+			Reason:  v1beta1.InvalidPredictorSpec,
+			Message: errMsg,
+		})
+		return nil, errors.New(errMsg)
+	}
+
+	var workerContainer *v1.Container
+	var mergedWorkerPodSpec *v1.PodSpec
+	var err error
+
+	targetisvcContainer := v1.Container{}
+	if isvc.Spec.Predictor.WorkerSpec.Containers != nil {
+		targetisvcContainer = isvc.Spec.Predictor.WorkerSpec.Containers[0]
+	}
+	_, workerContainer, mergedWorkerPodSpec, err = isvcutils.MergeServingRuntimeAndInferenceServiceSpecs(sRuntime.WorkerSpec.Containers, targetisvcContainer, isvc, constants.WorkerContainerName, sRuntime.WorkerSpec.ServingRuntimePodSpec, isvc.Spec.Predictor.WorkerSpec.PodSpec)
+	if err != nil {
+		return nil, err
+	}
+
+	// Set the PipelineParallelSize from InferenceService to ServingRuntime workerSpec.PipelineParallelSize
+	if isvc.Spec.Predictor.WorkerSpec.PipelineParallelSize != nil {
+		sRuntime.WorkerSpec.PipelineParallelSize = isvc.Spec.Predictor.WorkerSpec.PipelineParallelSize
+	}
+
+	// Set the TensorParallelSize from InferenceService to ServingRuntime workerSpec.TensorParallelSize
+	if isvc.Spec.Predictor.WorkerSpec.TensorParallelSize != nil {
+		sRuntime.WorkerSpec.TensorParallelSize = isvc.Spec.Predictor.WorkerSpec.TensorParallelSize
+	}
+
+	mergedWorkerPodSpec.Containers = []v1.Container{
+		*workerContainer,
+	}
+
+	// Add required environment variables: PipelineParallelSize, TensorParallelSize
+	// Deployment node deployement
+	if err := isvcutils.AddEnvVarToPodSpec(podSpec, constants.InferenceServiceContainerName, constants.PipelineParallelSizeEnvName, strconv.Itoa(*sRuntime.WorkerSpec.PipelineParallelSize)); err != nil {
+		return nil, errors.Wrapf(err, "failed to add PIPELINE_PARALLEL_SIZE environment to the container(%s)", constants.InferenceServiceContainerName)
+	}
+
+	if err := isvcutils.AddEnvVarToPodSpec(podSpec, constants.InferenceServiceContainerName, constants.TensorParallelSizeEnvName, strconv.Itoa(*sRuntime.WorkerSpec.TensorParallelSize)); err != nil {
+		return nil, errors.Wrapf(err, "failed to add Tensor_PARALLEL_SIZE environment to the container(%s)", constants.InferenceServiceContainerName)
+	}
+
+	// Set the environment variable for "isvc name" to the MODEL_NAME when multiNodeEnabled is true.
+	if err := isvcutils.AddEnvVarToPodSpec(podSpec, constants.InferenceServiceContainerName, "MODEL_NAME", isvc.Name); err != nil {
+		return nil, errors.Wrapf(err, "failed to add MODEL_NAME environment to the container(%s)", constants.InferenceServiceContainerName)
+	}
+
+	deploymentAnnotations := annotations[constants.StorageInitializerSourceUriInternalAnnotationKey]
+	storageProtocol := strings.Split(deploymentAnnotations, "://")[0]
+	if storageProtocol == "pvc" {
+		// Set the environment variable for "/mnt/models" to the MODEL_DIR when multiNodeEnabled is true.
+		if err := isvcutils.AddEnvVarToPodSpec(podSpec, constants.InferenceServiceContainerName, "MODEL_DIR", constants.DefaultModelLocalMountPath); err != nil {
+			return nil, errors.Wrapf(err, "failed to add MODEL_DIR environment to the container(%s)", constants.DefaultModelLocalMountPath)
+		}
+	}
+	// Worker node deployement
+	if err := isvcutils.AddEnvVarToPodSpec(mergedWorkerPodSpec, constants.WorkerContainerName, constants.PipelineParallelSizeEnvName, strconv.Itoa(*sRuntime.WorkerSpec.PipelineParallelSize)); err != nil {
+		return nil, errors.Wrapf(err, "failed to add PIPELINE_PARALLEL_SIZE environment to the container(%s)", constants.WorkerContainerName)
+	}
+
+	// Set the environment variable for "isvc name" to the ISVC_NAME when multiNodeEnabled is true.
+	if err := isvcutils.AddEnvVarToPodSpec(mergedWorkerPodSpec, constants.WorkerContainerName, "ISVC_NAME", isvc.Name); err != nil {
+		return nil, errors.Wrapf(err, "failed to add ISVC_NAME environment to the container(%s)", constants.InferenceServiceContainerName)
+	}
+	// Set the environment variable for "isvc name" to the ISVC_NAME when multiNodeEnabled is true.
+	if err := isvcutils.AddEnvVarToPodSpec(mergedWorkerPodSpec, constants.WorkerContainerName, "HEAD_SVC", constants.GeHeadServiceName(isvc.Name, isvcGeneration)); err != nil {
+		return nil, errors.Wrapf(err, "failed to add ISVC_NAME environment to the container(%s)", constants.InferenceServiceContainerName)
+	}
+	return mergedWorkerPodSpec, nil
+}
