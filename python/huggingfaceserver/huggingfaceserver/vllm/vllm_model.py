@@ -13,6 +13,8 @@
 # limitations under the License.
 
 from typing import AsyncIterator, Iterable, Optional, Union
+import os
+import signal
 
 import torch
 from vllm.entrypoints.logger import RequestLogger
@@ -28,7 +30,7 @@ from kserve.protocol.rest.openai import (
 )
 from kserve.protocol.rest.openai.types.openapi import ChatCompletionTool
 from kserve.protocol.rest.openai.types import Completion
-from vllm.engine.async_llm_engine import AsyncLLMEngine
+from vllm.engine.async_llm_engine import AsyncLLMEngine, AsyncEngineDeadError
 from vllm import AsyncEngineArgs
 
 from .vllm_completions import OpenAIServingCompletion
@@ -63,6 +65,9 @@ class VLLMModel(Model, OpenAIChatAdapterModel):  # pylint:disable=c-extension-no
     async def healthy(self) -> bool:
         try:
             await self.vllm_engine.check_health()
+        except AsyncEngineDeadError as e:
+            os.kill(os.getpid(), signal.SIGKILL)
+            raise ModelNotReady(self.name) from e
         except Exception as e:
             raise ModelNotReady(self.name) from e
         return True
